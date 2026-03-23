@@ -18,10 +18,19 @@ __DOMAIN__ {
         }
     }
 
-    # Metrics API — proxied to backend servers
-    handle /metrics {
-        reverse_proxy __WS_VM_1_IP__:8080 __WS_VM_2_IP__:8080 __WS_VM_3_IP__:8080 {
-            lb_policy round_robin
-        }
+    # Metrics API — per-server routes (for metrics dashboard)
+    handle /metrics/1 {
+        rewrite * /metrics
+        reverse_proxy __WS_VM_1_IP__:8080
+    }
+
+    handle /metrics/2 {
+        rewrite * /metrics
+        reverse_proxy __WS_VM_2_IP__:8080
+    }
+
+    handle /metrics/3 {
+        rewrite * /metrics
+        reverse_proxy __WS_VM_3_IP__:8080
     }
 }
