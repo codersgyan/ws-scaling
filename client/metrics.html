@@ -66,7 +66,7 @@
       const results = await Promise.all(
         SERVERS.map(async (path, i) => {
           try {
-            const res = await fetch(path, { signal: AbortSignal.timeout(3000) });
+            const res = await fetch(path, { signal: AbortSignal.timeout(10000) });
             const data = await res.json();
             return { server: `Server ${i + 1}`, path, data, online: true };
           } catch {
@@ -138,7 +138,7 @@
 
     // Start polling
     fetchAll();
-    setInterval(fetchAll, 2000);
+    setInterval(fetchAll, 5000);
   </script>
 </body>
 </html>

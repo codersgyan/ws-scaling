@@ -5,7 +5,8 @@ import { initDb, saveMessage, getMessagesSince } from "./db.js";
 import {
   initNats,
   publishMessage,
-  subscribeToMessages,
+  subscribeToRoom,
+  unsubscribeFromRoom,
 } from "./nats-bridge.js";
 import { getMetrics } from "./metrics.js";
 import { setupGracefulShutdown } from "./graceful.js";
@@ -43,8 +44,8 @@ async function main() {
   const pool = await initDb();
   const nc = await initNats();
 
-  // Subscribe to NATS — deliver cross-server messages to local clients
-  subscribeToMessages(nc, SERVER_ID, (data) => {
+  // NATS message handler — called when a message arrives for a room we're subscribed to
+  function handleNatsMessage(data) {
     broadcastToRoom(data.room, {
       type: "message",
       id: data.id,
@@ -54,7 +55,7 @@ async function main() {
       serverId: data.serverId,
       createdAt: data.createdAt,
     });
-  });
+  }
 
   // HTTP server for metrics
   const server = createServer((req, res) => {
@@ -116,6 +117,10 @@ async function main() {
     ws.on("pong", () => { ws.isAlive = true; });
 
     addToRoom(room, client);
+
+    // Subscribe to NATS for this room if first local user
+    subscribeToRoom(nc, room, SERVER_ID, handleNatsMessage);
+
     console.log(
       `[ws] ${username} joined room ${room} on ${SERVER_ID} (${rooms.get(room)?.size} in room)`
     );
@@ -198,6 +203,12 @@ async function main() {
 
     ws.on("close", () => {
       removeFromRoom(room, client);
+
+      // Unsubscribe from NATS if no local users left in this room
+      if (!rooms.has(room)) {
+        unsubscribeFromRoom(room);
+      }
+
       console.log(
         `[ws] ${username} left room ${room} on ${SERVER_ID}`
       );

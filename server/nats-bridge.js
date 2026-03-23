@@ -2,6 +2,9 @@ import { connect, JSONCodec } from "nats";
 
 const jc = JSONCodec();
 
+// room -> { sub, handler }
+const roomSubs = new Map();
+
 export async function initNats() {
   const url = process.env.NATS_URL || "nats://localhost:4222";
 
@@ -22,8 +25,13 @@ export function publishMessage(nc, room, payload) {
   nc.publish(`chat.${room}`, jc.encode(payload));
 }
 
-export function subscribeToMessages(nc, serverId, onMessage) {
-  const sub = nc.subscribe("chat.*");
+export function subscribeToRoom(nc, room, serverId, onMessage) {
+  if (roomSubs.has(room)) return; // already subscribed
+
+  const sub = nc.subscribe(`chat.${room}`);
+  roomSubs.set(room, sub);
+
+  console.log(`[nats] Subscribed to chat.${room}`);
 
   (async () => {
     for await (const msg of sub) {
@@ -36,8 +44,15 @@ export function subscribeToMessages(nc, serverId, onMessage) {
       }
     }
   })();
+}
 
-  return sub;
+export function unsubscribeFromRoom(room) {
+  const sub = roomSubs.get(room);
+  if (!sub) return;
+
+  sub.unsubscribe();
+  roomSubs.delete(room);
+  console.log(`[nats] Unsubscribed from chat.${room}`);
 }
 
 export async function drainNats(nc) {

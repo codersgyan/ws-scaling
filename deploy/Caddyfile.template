@@ -13,7 +13,7 @@ __DOMAIN__ {
     # WebSocket reverse proxy with load balancing
     handle /ws* {
         reverse_proxy __WS_VM_1_IP__:8080 __WS_VM_2_IP__:8080 __WS_VM_3_IP__:8080 {
-            lb_policy least_conn
+            lb_policy round_robin
             flush_interval -1
         }
     }
