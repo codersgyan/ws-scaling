@@ -1,5 +1,10 @@
 __DOMAIN__ {
     # Serve static client files
+    handle /metrics.html {
+        root * /srv/client
+        file_server
+    }
+
     handle / {
         root * /srv/client
         file_server
@@ -13,7 +18,7 @@ __DOMAIN__ {
         }
     }
 
-    # Metrics endpoint
+    # Metrics API — proxied to backend servers
     handle /metrics {
         reverse_proxy __WS_VM_1_IP__:8080 __WS_VM_2_IP__:8080 __WS_VM_3_IP__:8080 {
             lb_policy round_robin

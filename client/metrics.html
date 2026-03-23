@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Server Metrics — WebSocket Scaling Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; padding: 24px; }
+
+    h1 { font-size: 20px; margin-bottom: 4px; }
+    .subtitle { color: #94a3b8; font-size: 13px; margin-bottom: 24px; }
+
+    /* Config panel */
+    #config {
+      background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 20px; margin-bottom: 24px;
+    }
+    #config h2 { font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+    #config .row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+    #config input {
+      flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 13px; font-family: monospace;
+    }
+    #config input:focus { border-color: #3b82f6; outline: none; }
+    #config .remove-btn {
+      background: #dc2626; border: none; color: white; width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 16px; line-height: 1;
+    }
+    #config .remove-btn:hover { background: #b91c1c; }
+    #config .actions { display: flex; gap: 8px; margin-top: 12px; }
+    #config button {
+      padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: 600;
+    }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+    .btn-secondary:hover { background: #475569; }
+
+    /* Status */
+    #status { font-size: 13px; color: #94a3b8; margin-bottom: 16px; }
+    #status .live { color: #22c55e; }
+    #status .error { color: #ef4444; }
+
+    /* Metrics grid */
+    #metrics-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px;
+    }
+    .server-card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 16px;
+    }
+    .server-card.offline { opacity: 0.5; }
+    .server-card h3 { color: #3b82f6; margin-bottom: 12px; font-size: 15px; display: flex; justify-content: space-between; align-items: center; }
+    .server-card h3 .badge {
+      font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500;
+    }
+    .badge.online { background: #166534; color: #22c55e; }
+    .badge.offline { background: #7f1d1d; color: #ef4444; }
+    .stat { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #334155; }
+    .stat:last-child { border-bottom: none; }
+    .stat .label { color: #94a3b8; font-size: 13px; }
+    .stat .value { font-size: 13px; font-weight: 500; }
+    .stat .value.highlight { color: #3b82f6; font-size: 15px; }
+
+    /* Totals */
+    #totals {
+      background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 16px; margin-bottom: 16px;
+      display: none;
+    }
+    #totals h3 { color: #94a3b8; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+    #totals .stats-row { display: flex; gap: 24px; flex-wrap: wrap; }
+    #totals .big-stat { text-align: center; }
+    #totals .big-stat .number { font-size: 28px; font-weight: 700; color: #3b82f6; }
+    #totals .big-stat .label { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <h1>Server Metrics</h1>
+  <p class="subtitle">Real-time monitoring for all WebSocket servers</p>
+
+  <!-- Config -->
+  <div id="config">
+    <h2>Server IPs</h2>
+    <p style="color:#94a3b8; font-size:12px; margin-bottom:12px;">
+      Enter the IP:port of each WebSocket server. Saved to localStorage.
+    </p>
+    <div id="server-inputs"></div>
+    <div class="actions">
+      <button class="btn-secondary" onclick="addServerInput('')">+ Add Server</button>
+      <button class="btn-primary" onclick="saveAndStart()">Save &amp; Start</button>
+    </div>
+  </div>
+
+  <div id="status"></div>
+  <div id="totals">
+    <h3>Totals</h3>
+    <div class="stats-row" id="totals-content"></div>
+  </div>
+  <div id="metrics-grid"></div>
+
+  <script>
+    const STORAGE_KEY = "ws_metrics_servers";
+    let servers = [];
+    let pollInterval = null;
+
+    // --- Config UI ---
+    function loadConfig() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          servers = JSON.parse(saved);
+        } catch { servers = []; }
+      }
+      if (servers.length === 0) {
+        servers = ["", "", ""];
+      }
+      renderInputs();
+    }
+
+    function renderInputs() {
+      const container = document.getElementById("server-inputs");
+      container.innerHTML = "";
+      servers.forEach((ip, i) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.innerHTML = `
+          <input type="text" value="${ip}" placeholder="e.g. 10.0.0.3:8080" onchange="servers[${i}]=this.value" />
+          <button class="remove-btn" onclick="removeServer(${i})" title="Remove">&times;</button>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    function addServerInput(val) {
+      servers.push(val);
+      renderInputs();
+    }
+
+    function removeServer(i) {
+      servers.splice(i, 1);
+      renderInputs();
+    }
+
+    function saveAndStart() {
+      // Read current input values
+      const inputs = document.querySelectorAll("#server-inputs input");
+      servers = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+
+      if (servers.length === 0) {
+        alert("Add at least one server IP.");
+        return;
+      }
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(servers));
+      startPolling();
+    }
+
+    // --- Polling ---
+    function startPolling() {
+      if (pollInterval) clearInterval(pollInterval);
+      document.getElementById("status").innerHTML = '<span class="live">Polling...</span> every 2 seconds';
+      fetchAll();
+      pollInterval = setInterval(fetchAll, 2000);
+    }
+
+    async function fetchAll() {
+      const results = await Promise.all(
+        servers.map(async (addr) => {
+          const url = `http://${addr}/metrics`;
+          try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+            const data = await res.json();
+            return { addr, data, online: true };
+          } catch {
+            return { addr, data: null, online: false };
+          }
+        })
+      );
+      render(results);
+    }
+
+    // --- Render ---
+    function render(results) {
+      const grid = document.getElementById("metrics-grid");
+      const onlineResults = results.filter(r => r.online && r.data);
+
+      // Totals
+      const totalsEl = document.getElementById("totals");
+      if (onlineResults.length > 0) {
+        totalsEl.style.display = "block";
+        const totalConns = onlineResults.reduce((sum, r) => sum + (r.data.connections || 0), 0);
+        const totalRooms = new Set(onlineResults.flatMap(r => Object.keys(r.data.rooms || {}))).size;
+        const totalMem = onlineResults.reduce((sum, r) => sum + (r.data.memory?.rss || 0), 0);
+
+        document.getElementById("totals-content").innerHTML = `
+          <div class="big-stat"><div class="number">${totalConns}</div><div class="label">Total Connections</div></div>
+          <div class="big-stat"><div class="number">${totalRooms}</div><div class="label">Active Rooms</div></div>
+          <div class="big-stat"><div class="number">${onlineResults.length}/${results.length}</div><div class="label">Servers Online</div></div>
+          <div class="big-stat"><div class="number">${totalMem} MB</div><div class="label">Total Memory (RSS)</div></div>
+        `;
+      } else {
+        totalsEl.style.display = "none";
+      }
+
+      // Server cards
+      grid.innerHTML = results.map(({ addr, data, online }) => {
+        if (!online || !data) {
+          return `
+            <div class="server-card offline">
+              <h3>${addr} <span class="badge offline">OFFLINE</span></h3>
+              <div class="stat"><span class="label">Status</span><span class="value" style="color:#ef4444;">Unreachable</span></div>
+            </div>`;
+        }
+
+        const rooms = data.rooms || {};
+        const roomStr = Object.entries(rooms).map(([r, c]) => `${r} (${c})`).join(", ") || "None";
+
+        return `
+          <div class="server-card">
+            <h3>${data.serverId} <span class="badge online">ONLINE</span></h3>
+            <div class="stat"><span class="label">Address</span><span class="value">${addr}</span></div>
+            <div class="stat"><span class="label">Connections</span><span class="value highlight">${data.connections}</span></div>
+            <div class="stat"><span class="label">Rooms</span><span class="value">${roomStr}</span></div>
+            <div class="stat"><span class="label">Memory (RSS)</span><span class="value">${data.memory?.rss || "?"} MB</span></div>
+            <div class="stat"><span class="label">Heap</span><span class="value">${data.memory?.heapUsed || "?"}/${data.memory?.heapTotal || "?"} MB</span></div>
+            <div class="stat"><span class="label">CPU (user)</span><span class="value">${data.cpu?.user || 0} ms</span></div>
+            <div class="stat"><span class="label">CPU (system)</span><span class="value">${data.cpu?.system || 0} ms</span></div>
+            <div class="stat"><span class="label">Uptime</span><span class="value">${formatUptime(data.uptime)}</span></div>
+          </div>`;
+      }).join("");
+    }
+
+    function formatUptime(seconds) {
+      if (!seconds) return "?";
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
+    // --- Init ---
+    loadConfig();
+
+    // Auto-start if servers are already configured
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.length > 0 && parsed[0] !== "") {
+          startPolling();
+        }
+      } catch {}
+    }
+  </script>
+</body>
+</html>

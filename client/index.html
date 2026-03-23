@@ -55,18 +55,6 @@
       padding: 10px 20px; border-radius: 8px; border: none; background: #3b82f6; color: white; font-weight: 600; cursor: pointer; font-size: 14px;
     }
     #input-bar button:hover { background: #2563eb; }
-
-    /* Metrics panel */
-    #metrics-panel {
-      width: 320px; background: #1e293b; border-left: 1px solid #334155; padding: 16px; overflow-y: auto; display: none; font-size: 13px;
-    }
-    #metrics-panel h3 { margin-bottom: 12px; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
-    .server-card {
-      background: #0f172a; border-radius: 8px; padding: 12px; margin-bottom: 10px; border: 1px solid #334155;
-    }
-    .server-card h4 { color: #3b82f6; margin-bottom: 8px; }
-    .server-card .stat { display: flex; justify-content: space-between; padding: 2px 0; }
-    .server-card .stat .label { color: #94a3b8; }
   </style>
 </head>
 <body>
@@ -97,12 +85,6 @@
         <button id="send-btn">Send</button>
       </div>
     </div>
-
-    <!-- Metrics -->
-    <div id="metrics-panel">
-      <h3>Server Metrics</h3>
-      <div id="metrics-content"></div>
-    </div>
   </div>
 
   <script>
@@ -114,8 +96,7 @@
     let lastMessageId = 0;
     let reconnectAttempt = 0;
     let reconnectTimer = null;
-    let metricsInterval = null;
-    let serverReconnectDelay = null; // set by server during graceful shutdown
+    let serverReconnectDelay = null;
 
     // --- Status ---
     function setStatus(state, text) {
@@ -153,9 +134,7 @@
         scheduleReconnect();
       };
 
-      ws.onerror = () => {
-        // onclose will fire after this
-      };
+      ws.onerror = () => {};
     }
 
     // --- Reconnect ---
@@ -164,11 +143,9 @@
 
       let delay;
       if (serverReconnectDelay !== null) {
-        // Graceful shutdown: use server-provided staggered delay
         delay = serverReconnectDelay;
         serverReconnectDelay = null;
       } else {
-        // Unexpected disconnect: exponential backoff + jitter
         delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 30000) + Math.random() * 1000;
       }
 
@@ -216,7 +193,6 @@
             lastMessageId = msg.id;
             addChatMessage(msg);
           }
-          // else: duplicate, skip
           break;
 
         case "reconnect":
@@ -259,49 +235,6 @@
       input.value = "";
     }
 
-    // --- Metrics ---
-    function startMetrics() {
-      if (metricsInterval) clearInterval(metricsInterval);
-      metricsInterval = setInterval(fetchMetrics, 2000);
-      fetchMetrics();
-    }
-
-    async function fetchMetrics() {
-      try {
-        // Hit the endpoint multiple times to reach different servers through Nginx round-robin
-        const results = await Promise.all(
-          Array.from({ length: 6 }, () =>
-            fetch("/metrics").then((r) => r.json()).catch(() => null)
-          )
-        );
-        const servers = new Map();
-        for (const r of results) {
-          if (r && r.serverId) servers.set(r.serverId, r);
-        }
-        renderMetrics([...servers.values()]);
-      } catch {
-        // ignore
-      }
-    }
-
-    function renderMetrics(servers) {
-      const container = $("#metrics-content");
-      container.innerHTML = servers
-        .sort((a, b) => a.serverId.localeCompare(b.serverId))
-        .map(
-          (s) => `
-        <div class="server-card">
-          <h4>${s.serverId}</h4>
-          <div class="stat"><span class="label">Connections</span><span>${s.connections}</span></div>
-          <div class="stat"><span class="label">Rooms</span><span>${Object.entries(s.rooms).map(([r, c]) => `${r}(${c})`).join(", ") || "—"}</span></div>
-          <div class="stat"><span class="label">Memory (RSS)</span><span>${s.memory.rss} MB</span></div>
-          <div class="stat"><span class="label">Heap</span><span>${s.memory.heapUsed}/${s.memory.heapTotal} MB</span></div>
-          <div class="stat"><span class="label">Uptime</span><span>${s.uptime}s</span></div>
-        </div>`
-        )
-        .join("");
-    }
-
     // --- Events ---
     $("#connect-btn").addEventListener("click", () => {
       username = $("#username-input").value.trim();
@@ -310,10 +243,8 @@
 
       $("#login").style.display = "none";
       $("#chat-area").style.display = "flex";
-      $("#metrics-panel").style.display = "block";
 
       connect();
-      startMetrics();
     });
 
     $("#username-input").addEventListener("keydown", (e) => {
