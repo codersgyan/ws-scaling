@@ -19,7 +19,7 @@ sudo tee /etc/nats/nats-server.conf > /dev/null <<'NATSCONF'
 port: 4222
 http_port: 8222
 
-max_connections: 10000
+max_connections: 25000
 max_payload: 1048576
 
 # Logging
