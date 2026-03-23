@@ -28,9 +28,13 @@ load_env() {
 
     source "$env_file"
 
-    local required_vars=(DOMAIN NATS_VM_IP WS_VM_1_IP WS_VM_2_IP WS_VM_3_IP MYSQL_HOST MYSQL_USER MYSQL_PASSWORD MYSQL_DATABASE)
-    local missing=()
+    # If caller passes specific vars, validate only those. Otherwise use defaults.
+    local required_vars=("$@")
+    if [[ ${#required_vars[@]} -eq 0 ]]; then
+        required_vars=(DOMAIN NATS_VM_IP WS_VM_1_IP WS_VM_2_IP WS_VM_3_IP MYSQL_HOST MYSQL_USER MYSQL_PASSWORD MYSQL_DATABASE)
+    fi
 
+    local missing=()
     for var in "${required_vars[@]}"; do
         if [[ -z "${!var:-}" ]]; then
             missing+=("$var")

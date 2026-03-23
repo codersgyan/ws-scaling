@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-load_env
+load_env MYSQL_ROOT_PASSWORD MYSQL_SELF_HOSTED_USER MYSQL_SELF_HOSTED_PASSWORD MYSQL_DATABASE WS_VM_1_IP WS_VM_2_IP WS_VM_3_IP
 update_system
 ensure_docker
 apply_sysctl_tuning

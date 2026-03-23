@@ -12,6 +12,22 @@ update_system
 ensure_docker
 apply_sysctl_tuning
 
+# Create NATS config file
+log "Writing NATS configuration..."
+sudo mkdir -p /etc/nats
+sudo tee /etc/nats/nats-server.conf > /dev/null <<'NATSCONF'
+port: 4222
+http_port: 8222
+
+max_connections: 10000
+max_payload: 1048576
+
+# Logging
+debug: false
+trace: false
+logtime: true
+NATSCONF
+
 # Stop existing container if running
 docker rm -f ws-nats 2>/dev/null || true
 
@@ -23,9 +39,9 @@ docker run -d \
     --ulimit nofile=65535:65535 \
     -p 4222:4222 \
     -p 8222:8222 \
+    -v /etc/nats/nats-server.conf:/etc/nats/nats-server.conf:ro \
     nats:2-alpine \
-    --max_connections 10000 \
-    --max_payload 1048576
+    -c /etc/nats/nats-server.conf
 
 # Wait and verify
 sleep 2
