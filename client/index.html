@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WebSocket Scaling Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; height: 100vh; display: flex; flex-direction: column; }
+
+    /* Status bar */
+    #status-bar {
+      background: #1e293b; padding: 8px 16px; display: flex; gap: 16px; align-items: center; font-size: 13px; border-bottom: 1px solid #334155;
+    }
+    #status-bar .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .dot.connected { background: #22c55e; }
+    .dot.disconnected { background: #ef4444; }
+    .dot.connecting { background: #eab308; }
+
+    /* Layout */
+    #app { display: flex; flex: 1; overflow: hidden; }
+
+    /* Login */
+    #login {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 16px;
+    }
+    #login h1 { font-size: 24px; margin-bottom: 8px; }
+    #login input, #login select, #login button {
+      padding: 10px 16px; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font-size: 15px; width: 260px;
+    }
+    #login button { background: #3b82f6; border: none; cursor: pointer; font-weight: 600; }
+    #login button:hover { background: #2563eb; }
+
+    /* Chat area */
+    #chat-area { display: none; flex-direction: column; flex: 1; }
+    #messages {
+      flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 6px;
+    }
+    .msg { padding: 6px 12px; border-radius: 8px; max-width: 80%; word-wrap: break-word; }
+    .msg.self { background: #1d4ed8; align-self: flex-end; }
+    .msg.other { background: #334155; align-self: flex-start; }
+    .msg.system { background: transparent; color: #94a3b8; font-size: 12px; align-self: center; font-style: italic; }
+    .msg .meta { font-size: 11px; color: #94a3b8; margin-bottom: 2px; }
+    .msg .text { font-size: 14px; }
+
+    /* Input */
+    #input-bar {
+      display: flex; padding: 12px 16px; gap: 8px; background: #1e293b; border-top: 1px solid #334155;
+    }
+    #input-bar input {
+      flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; font-size: 14px; outline: none;
+    }
+    #input-bar input:focus { border-color: #3b82f6; }
+    #input-bar button {
+      padding: 10px 20px; border-radius: 8px; border: none; background: #3b82f6; color: white; font-weight: 600; cursor: pointer; font-size: 14px;
+    }
+    #input-bar button:hover { background: #2563eb; }
+
+    /* Metrics panel */
+    #metrics-panel {
+      width: 320px; background: #1e293b; border-left: 1px solid #334155; padding: 16px; overflow-y: auto; display: none; font-size: 13px;
+    }
+    #metrics-panel h3 { margin-bottom: 12px; font-size: 14px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+    .server-card {
+      background: #0f172a; border-radius: 8px; padding: 12px; margin-bottom: 10px; border: 1px solid #334155;
+    }
+    .server-card h4 { color: #3b82f6; margin-bottom: 8px; }
+    .server-card .stat { display: flex; justify-content: space-between; padding: 2px 0; }
+    .server-card .stat .label { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div id="status-bar">
+    <span><span class="dot disconnected" id="status-dot"></span><span id="status-text">Disconnected</span></span>
+    <span id="server-info" style="color:#94a3b8"></span>
+    <span id="reconnect-info" style="color:#eab308"></span>
+  </div>
+
+  <div id="app">
+    <!-- Login -->
+    <div id="login">
+      <h1>WebSocket Scaling Demo</h1>
+      <input type="text" id="username-input" placeholder="Username" value="" />
+      <select id="room-select">
+        <option value="general">general</option>
+        <option value="tech">tech</option>
+        <option value="random">random</option>
+      </select>
+      <button id="connect-btn">Connect</button>
+    </div>
+
+    <!-- Chat -->
+    <div id="chat-area">
+      <div id="messages"></div>
+      <div id="input-bar">
+        <input type="text" id="msg-input" placeholder="Type a message..." />
+        <button id="send-btn">Send</button>
+      </div>
+    </div>
+
+    <!-- Metrics -->
+    <div id="metrics-panel">
+      <h3>Server Metrics</h3>
+      <div id="metrics-content"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (sel) => document.querySelector(sel);
+
+    let ws = null;
+    let username = "";
+    let room = "";
+    let lastMessageId = 0;
+    let reconnectAttempt = 0;
+    let reconnectTimer = null;
+    let metricsInterval = null;
+    let serverReconnectDelay = null; // set by server during graceful shutdown
+
+    // --- Status ---
+    function setStatus(state, text) {
+      const dot = $("#status-dot");
+      dot.className = `dot ${state}`;
+      $("#status-text").textContent = text;
+    }
+
+    // --- Connect ---
+    function connect() {
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+      setStatus("connecting", "Connecting...");
+      $("#reconnect-info").textContent = "";
+
+      const params = new URLSearchParams({ username, room });
+      if (lastMessageId > 0) params.set("lastMessageId", lastMessageId);
+
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${protocol}//${location.host}/ws?${params}`);
+
+      ws.onopen = () => {
+        setStatus("connected", "Connected");
+        reconnectAttempt = 0;
+        serverReconnectDelay = null;
+      };
+
+      ws.onmessage = (evt) => {
+        const msg = JSON.parse(evt.data);
+        handleMessage(msg);
+      };
+
+      ws.onclose = () => {
+        setStatus("disconnected", "Disconnected");
+        scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        // onclose will fire after this
+      };
+    }
+
+    // --- Reconnect ---
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+
+      let delay;
+      if (serverReconnectDelay !== null) {
+        // Graceful shutdown: use server-provided staggered delay
+        delay = serverReconnectDelay;
+        serverReconnectDelay = null;
+      } else {
+        // Unexpected disconnect: exponential backoff + jitter
+        delay = Math.min(1000 * Math.pow(2, reconnectAttempt), 30000) + Math.random() * 1000;
+      }
+
+      reconnectAttempt++;
+      const seconds = Math.ceil(delay / 1000);
+      $("#reconnect-info").textContent = `Reconnecting in ${seconds}s...`;
+
+      let remaining = seconds;
+      const countdown = setInterval(() => {
+        remaining--;
+        if (remaining > 0) {
+          $("#reconnect-info").textContent = `Reconnecting in ${remaining}s...`;
+        } else {
+          clearInterval(countdown);
+        }
+      }, 1000);
+
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        clearInterval(countdown);
+        connect();
+      }, delay);
+    }
+
+    // --- Message handling ---
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case "welcome":
+          $("#server-info").textContent = `Server: ${msg.serverId} | Room: ${msg.room}`;
+          addSystemMessage(`Connected to ${msg.serverId}`);
+          break;
+
+        case "replay_start":
+          addSystemMessage("--- Replaying missed messages ---");
+          break;
+
+        case "replay_end":
+          if (msg.count > 0) {
+            addSystemMessage(`--- Replay complete (${msg.count} messages) ---`);
+          }
+          break;
+
+        case "message":
+          if (msg.id > lastMessageId) {
+            lastMessageId = msg.id;
+            addChatMessage(msg);
+          }
+          // else: duplicate, skip
+          break;
+
+        case "reconnect":
+          serverReconnectDelay = msg.delay;
+          addSystemMessage(`Server shutting down, reconnecting in ${Math.ceil(msg.delay / 1000)}s...`);
+          break;
+      }
+    }
+
+    function addChatMessage(msg) {
+      const div = document.createElement("div");
+      const isSelf = msg.username === username;
+      div.className = `msg ${isSelf ? "self" : "other"}`;
+      div.innerHTML = `<div class="meta">${escHtml(msg.username)} &middot; ${msg.serverId}</div><div class="text">${escHtml(msg.text)}</div>`;
+      $("#messages").appendChild(div);
+      $("#messages").scrollTop = $("#messages").scrollHeight;
+    }
+
+    function addSystemMessage(text) {
+      const div = document.createElement("div");
+      div.className = "msg system";
+      div.textContent = text;
+      $("#messages").appendChild(div);
+      $("#messages").scrollTop = $("#messages").scrollHeight;
+    }
+
+    function escHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    // --- Send ---
+    function sendMessage() {
+      const input = $("#msg-input");
+      const text = input.value.trim();
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      ws.send(JSON.stringify({ type: "message", text }));
+      input.value = "";
+    }
+
+    // --- Metrics ---
+    function startMetrics() {
+      if (metricsInterval) clearInterval(metricsInterval);
+      metricsInterval = setInterval(fetchMetrics, 2000);
+      fetchMetrics();
+    }
+
+    async function fetchMetrics() {
+      try {
+        // Hit the endpoint multiple times to reach different servers through Nginx round-robin
+        const results = await Promise.all(
+          Array.from({ length: 6 }, () =>
+            fetch("/metrics").then((r) => r.json()).catch(() => null)
+          )
+        );
+        const servers = new Map();
+        for (const r of results) {
+          if (r && r.serverId) servers.set(r.serverId, r);
+        }
+        renderMetrics([...servers.values()]);
+      } catch {
+        // ignore
+      }
+    }
+
+    function renderMetrics(servers) {
+      const container = $("#metrics-content");
+      container.innerHTML = servers
+        .sort((a, b) => a.serverId.localeCompare(b.serverId))
+        .map(
+          (s) => `
+        <div class="server-card">
+          <h4>${s.serverId}</h4>
+          <div class="stat"><span class="label">Connections</span><span>${s.connections}</span></div>
+          <div class="stat"><span class="label">Rooms</span><span>${Object.entries(s.rooms).map(([r, c]) => `${r}(${c})`).join(", ") || "—"}</span></div>
+          <div class="stat"><span class="label">Memory (RSS)</span><span>${s.memory.rss} MB</span></div>
+          <div class="stat"><span class="label">Heap</span><span>${s.memory.heapUsed}/${s.memory.heapTotal} MB</span></div>
+          <div class="stat"><span class="label">Uptime</span><span>${s.uptime}s</span></div>
+        </div>`
+        )
+        .join("");
+    }
+
+    // --- Events ---
+    $("#connect-btn").addEventListener("click", () => {
+      username = $("#username-input").value.trim();
+      room = $("#room-select").value;
+      if (!username) return alert("Enter a username");
+
+      $("#login").style.display = "none";
+      $("#chat-area").style.display = "flex";
+      $("#metrics-panel").style.display = "block";
+
+      connect();
+      startMetrics();
+    });
+
+    $("#username-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") $("#connect-btn").click();
+    });
+
+    $("#send-btn").addEventListener("click", sendMessage);
+    $("#msg-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") sendMessage();
+    });
+  </script>
+</body>
+</html>

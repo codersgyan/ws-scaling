@@ -1,0 +1,11 @@
+{
+  "name": "ws-load-test",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node load-test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
