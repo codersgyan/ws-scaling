@@ -89,9 +89,31 @@ async function main() {
     });
   });
 
+  // --- Ping/Pong heartbeat to detect zombie connections ---
+  const HEARTBEAT_INTERVAL = 30000; // ping every 30s
+  const HEARTBEAT_TIMEOUT = 10000;  // wait 10s for pong
+
+  const heartbeatInterval = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (ws.isAlive === false) {
+        console.log(`[ws] Terminating zombie connection: ${ws.username}`);
+        ws.terminate();
+        continue;
+      }
+      ws.isAlive = false;
+      ws.ping();
+    }
+  }, HEARTBEAT_INTERVAL);
+
+  wss.on("close", () => clearInterval(heartbeatInterval));
+
   wss.on("connection", async (ws) => {
     const { username, room, lastMessageId } = ws;
     const client = { ws, username };
+
+    // Mark connection as alive
+    ws.isAlive = true;
+    ws.on("pong", () => { ws.isAlive = true; });
 
     addToRoom(room, client);
     console.log(
